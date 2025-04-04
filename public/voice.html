@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voice-Controlled Circle</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands"></script>
+  <style>
+   canvas { background: #f0f0f0; display: block; margin: auto; touch-action: none; }
+  </style>
+</head>
+<body>
+  <h1>One for all. All for one.</h1>
+  <p>Pronuncia "up", "down", "left" o "right" per muovere la pallina</p>
+
+<canvas id="canvas" width="1280" height="720"></canvas>
+
+<script>
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  let myId = null;
+  let players = {};
+
+  const socket = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+  socket.onopen = () => console.log('Connected to WebSocket');
+  socket.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.id) {
+      myId = data.id;
+    } else {
+      players = data;
+      draw();
+    }
+  };
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (const id in players) {
+      const { x, y, color } = players[id];
+      ctx.beginPath();
+      ctx.arc(x, y, 40, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.stroke();
+
+      if (id === myId) {
+        ctx.fillStyle = '#fff';
+        ctx.font = '30px Arial';
+        ctx.fillText('+', x - 10, y + 10);
+      }
+    }
+  }
+
+  function move(dx, dy) {
+    if (myId && players[myId]) {
+      players[myId].x += dx;
+      players[myId].y += dy;
+      socket.send(JSON.stringify({ type: 'move', x: players[myId].x, y: players[myId].y }));
+      draw();
+    }
+  }
+
+  async function initVoice() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(track => track.stop()); // test access only
+
+      const recognizer = speechCommands.create('BROWSER_FFT','directional4w');
+      await recognizer.ensureModelLoaded();
+
+      const labels = recognizer.wordLabels();
+      console.log('Available commands:', labels);
+
+      recognizer.listen(result => {
+        const scores = result.scores;
+        const command = labels[scores.indexOf(Math.max(...scores))];
+        console.log('Command:', command);
+
+        if (command === 'up') move(0, -20);
+        if (command === 'down') move(0, 20);
+        if (command === 'left') move(-20, 0);
+        if (command === 'right') move(20, 0);
+      }, {
+        includeSpectrogram: false,
+        probabilityThreshold: 0.9,
+        invokeCallbackOnNoiseAndUnknown: false
+      });
+    } catch (err) {
+      console.error('Speech command error:', err);
+    }
+  }
+
+  initVoice();
+</script>
+</body>
+</html>

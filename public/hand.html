@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Collaborative Hand Drag Circle</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
+  <style>
+   canvas { background: #f0f0f0; display: block; margin: auto; touch-action: none; }
+  </style>
+</head>
+<body>
+<h1>One for all. All for one.</h1>
+<p>Cerca di afferrare la tua palla con le dita</p>
+<canvas id="canvas" width="1280" height="720"></canvas>
+<script>
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+
+  let myId = null;
+  let players = {};
+  let dragging = false;
+
+  const socket = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+  socket.onopen = () => console.log('Connected to WebSocket');
+  socket.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.id) {
+      myId = data.id;
+    } else {
+      players = data;
+    }
+  };
+
+  async function setupCamera() {
+    const video = document.createElement('video');
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+    video.srcObject = stream;
+    await new Promise(resolve => video.onloadedmetadata = resolve);
+    video.play();
+    return video;
+  }
+
+  function distance(a, b) {
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+
+  function isNear(p, c, threshold = 50) {
+    return distance(p, c) < threshold;
+  }
+
+  async function main() {
+    const video = await setupCamera();
+    const model = handPoseDetection.SupportedModels.MediaPipeHands;
+    const detector = await handPoseDetection.createDetector(model, {
+      runtime: 'mediapipe',
+      solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands'
+    });
+
+    async function render() {
+      const hands = await detector.estimateHands(video, { flipHorizontal: true });
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Disegna tutti i giocatori
+      for (const id in players) {
+        const { x, y, color } = players[id];
+        ctx.beginPath();
+        ctx.arc(x, y, 40, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.stroke();
+
+        if (id === myId) {
+          ctx.fillStyle = '#fff';
+          ctx.font = '30px Arial';
+          ctx.fillText('+', x - 10, y + 10);
+        }
+      }
+
+      if (hands.length > 0 && myId) {
+        const keypoints = hands[0].keypoints;
+        const i = keypoints[8];
+        const p = keypoints[4];
+
+        if (i && p && i.x !== undefined && p.x !== undefined && players[myId]) {
+          const ipDist = distance(i, p);
+          const center = { x: (i.x + p.x) / 2, y: (i.y + p.y) / 2 };
+          const myCircle = players[myId];
+
+          if (ipDist < 60 && isNear(center, myCircle)) {
+            dragging = true;
+          } else {
+            dragging = false;
+          }
+
+          if (dragging) {
+            myCircle.x = center.x;
+            myCircle.y = center.y;
+            socket.send(JSON.stringify({ type: 'move', x: myCircle.x, y: myCircle.y }));
+          }
+
+          // Disegna le dita
+          ctx.beginPath();
+          ctx.moveTo(i.x, i.y);
+          ctx.lineTo(p.x, p.y);
+          ctx.strokeStyle = 'black';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.arc(i.x, i.y, 8, 0, Math.PI * 2);
+          ctx.fillStyle = 'blue';
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+          ctx.fillStyle = 'green';
+          ctx.fill();
+        }
+      }
+      requestAnimationFrame(render);
+    }
+    render();
+  }
+
+  main();
+</script>
+</body>
+</html>
